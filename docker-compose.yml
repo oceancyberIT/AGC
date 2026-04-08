@@ -1,0 +1,103 @@
+# =============================================================================
+# AGC — Full stack (default)
+# =============================================================================
+# Services:
+#   web      — Next.js (public site + API routes + admin) — this is your “frontend + backend”
+#   agc-db   — PostgreSQL (Prisma: site content, forms, events)
+#   redis    — Redis (rate limiting, etc.)
+#   migrate  — one-off Prisma migrations before web starts
+#
+# Usage (from repo root):
+#   cp .env.docker.example .env
+#   docker compose up -d --build
+#
+# Site: http://localhost:9200  |  Postgres on host: localhost:5436
+# =============================================================================
+
+name: agc
+
+services:
+  migrate:
+    build:
+      context: ./agc-site
+      dockerfile: Dockerfile.migrate
+    environment:
+      - DATABASE_URL=postgresql://agc:${AGC_DB_PASSWORD:-agc_secret}@agc-db:5432/agc?schema=public
+      # Set to 1 only if you want migrations without seed on deploy (rare).
+      - SKIP_DB_SEED_ON_DEPLOY=${SKIP_DB_SEED_ON_DEPLOY:-0}
+      # Set to 1 to overwrite PageContent from seed defaults (destructive). Omit or 0 = create missing slugs only.
+      - SEED_RESET_PAGE_CONTENT=${SEED_RESET_PAGE_CONTENT:-0}
+    depends_on:
+      agc-db:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    build:
+      context: ./agc-site
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-9200}:3000"
+    # Both volumes required: JSON library metadata (data/) and binary files (public/uploads) must stay in sync.
+    # Coolify: bind the same named volumes on redeploy or thumbnails return 404 while ids still appear in Admin.
+    volumes:
+      - agc-media-uploads:/app/public/uploads
+      - agc-media-metadata:/app/data
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL:-http://localhost:9200}
+      - AUTH_URL=${AUTH_URL:-http://localhost:9200}
+      - AUTH_SECRET=${AUTH_SECRET}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - DATABASE_URL=postgresql://agc:${AGC_DB_PASSWORD:-agc_secret}@agc-db:5432/agc?schema=public
+      - REDIS_URL=redis://redis:6379
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Liveness only — use 127.0.0.1 (avoids IPv6/localhost quirks). Not /api/health (503 if DB down).
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  agc-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_HOST_PORT:-5436}:5432"
+    environment:
+      POSTGRES_USER: agc
+      POSTGRES_PASSWORD: ${AGC_DB_PASSWORD:-agc_secret}
+      POSTGRES_DB: agc
+    volumes:
+      - agc-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agc"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  agc-db-data:
+  redis-data:
+  agc-media-uploads:
+  agc-media-metadata:

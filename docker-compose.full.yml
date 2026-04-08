@@ -1,0 +1,4 @@
+# Backward compatible alias — same as docker-compose.yml
+# Prefer: docker compose up -d
+include:
+  - docker-compose.yml

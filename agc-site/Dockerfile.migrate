@@ -1,0 +1,15 @@
+# One-off job: Prisma migrate deploy + optional db seed (baseline CMS content).
+# Used by docker-compose before `web` starts. PageContent: creates missing slugs only unless SEED_RESET_PAGE_CONTENT=1.
+FROM node:20-slim
+RUN apt-get update -y && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package.json package-lock.json* ./
+# Production deps only (~half the packages vs full ci). tsx is a runtime dependency for prisma db seed.
+RUN npm ci --omit=dev
+COPY prisma ./prisma
+COPY src ./src
+COPY tsconfig.json ./
+COPY scripts/docker-migrate-and-seed.sh ./scripts/docker-migrate-and-seed.sh
+RUN chmod +x ./scripts/docker-migrate-and-seed.sh
+RUN npx prisma generate
+CMD ["./scripts/docker-migrate-and-seed.sh"]
